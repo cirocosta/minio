@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/pem"
 	"fmt"
+  "strings"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -29,6 +30,7 @@ import (
 	triton "github.com/joyent/triton-go"
 	"github.com/joyent/triton-go/authentication"
 	"github.com/joyent/triton-go/storage"
+	"github.com/joyent/triton-go/client"
 
 	"github.com/minio/cli"
 	minio "github.com/minio/minio/cmd"
@@ -43,7 +45,7 @@ import (
 const (
 	mantaBackend     = "manta"
 	defaultMantaRoot = "/stor"
-	defaultMantaURL  = "https://us-east.manta.joyent.com"
+	defaultMantaURL  = "https://manta.liferay.io"
 )
 
 var mantaRoot = defaultMantaRoot
@@ -129,6 +131,8 @@ func (g *Manta) NewGatewayLayer(creds auth.Credentials) (minio.GatewayLayer, err
 			return nil, err
 		}
 	}
+
+  fmt.Println(endpoint)
 
 	if overrideRoot, ok := os.LookupEnv("MANTA_ROOT"); ok {
 		mantaRoot = overrideRoot
@@ -322,6 +326,10 @@ func (t *tritonObjects) ListObjects(bucket, prefix, marker, delimiter string, ma
 	}
 	objs, err = t.client.Dir().List(ctx, input)
 	if err != nil {
+    if client.IsResourceNotFoundError(err) {
+      return result, nil
+    }
+
 		return result, errors.Trace(err)
 	}
 
@@ -492,7 +500,25 @@ func (d dummySeeker) Seek(offset int64, whence int) (int64, error) {
 //
 // https://apidocs.joyent.com/manta/api.html#PutObject
 func (t *tritonObjects) PutObject(bucket, object string, data *hash.Reader, metadata map[string]string) (objInfo minio.ObjectInfo, err error) {
+
 	ctx := context.Background()
+  subdirs := strings.Split(object, "/")
+
+  for i := 0; i < len(subdirs) - 1; i++  {
+    dirName := strings.Join(subdirs[0:i+1], "/")
+
+    fmt.Println(path.Join(mantaRoot, bucket, dirName))
+
+    err = t.client.Dir().Put(ctx, &storage.PutDirectoryInput{
+      DirectoryName: path.Join(mantaRoot, bucket, dirName),
+    })
+
+    if err != nil {
+      return objInfo, errors.Trace(err)
+    }
+  }
+
+
 	if err = t.client.Objects().Put(ctx, &storage.PutObjectInput{
 		ContentLength: uint64(data.Size()),
 		ObjectPath:    path.Join(mantaRoot, bucket, object),
